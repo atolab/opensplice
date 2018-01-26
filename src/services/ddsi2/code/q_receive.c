@@ -32,6 +32,8 @@
 #include "os_if.h"
 #include "os_atomics.h"
 
+#include "ddsi_mcgroup.h"
+
 #include "v_group.h"
 #include "v_state.h"
 #include "v_message.h"
@@ -69,6 +71,7 @@
 #include "q_transmit.h"
 #include "q_globals.h"
 #include "q_static_assert.h"
+#include "q_init.h"
 
 #include "sysdeps.h"
 
@@ -2955,6 +2958,7 @@ static struct receiver_state *rst_cow_if_needed (int *rst_live, struct nn_rmsg *
 static int handle_submsg_sequence
 (
   ddsi_tran_conn_t conn,
+  const nn_locator_t *srcloc,
   struct thread_state1 * const self,
   nn_wctime_t tnowWC,
   nn_etime_t tnowE,
@@ -2997,6 +3001,7 @@ static int handle_submsg_sequence
   rst->forme = 1;
   rst->vendor = hdr->vendorid;
   rst->protocol_version = hdr->version;
+  rst->srcloc = *srcloc;
   rst_live = 0;
   ts_for_latmeas = 0;
   timestamp = invalid_ddsi_timestamp;
@@ -3256,6 +3261,7 @@ static c_bool do_packet
   unsigned char * buff;
   os_size_t buff_len = maxsz;
   Header_t * hdr;
+  nn_locator_t srcloc;
 
   if (rmsg == NULL)
   {
@@ -3275,7 +3281,7 @@ static c_bool do_packet
 
     /* Read in DDSI header plus MSG_LEN sub message that follows it */
 
-    sz = ddsi_conn_read (conn, buff, stream_hdr_size);
+    sz = ddsi_conn_read (conn, buff, stream_hdr_size, &srcloc);
 
     /* Read in remainder of packet */
 
@@ -3303,7 +3309,7 @@ static c_bool do_packet
       }
       else
       {
-        sz = ddsi_conn_read (conn, buff + stream_hdr_size, ml->length - stream_hdr_size);
+        sz = ddsi_conn_read (conn, buff + stream_hdr_size, ml->length - stream_hdr_size, NULL);
         if (sz > 0)
         {
           sz = (os_ssize_t) ml->length;
@@ -3315,7 +3321,7 @@ static c_bool do_packet
   {
     /* Get next packet */
 
-    sz = ddsi_conn_read (conn, buff, buff_len);
+    sz = ddsi_conn_read (conn, buff, buff_len, &srcloc);
   }
 
   if (sz > 0 && !gv.deaf_mute)
@@ -3337,8 +3343,13 @@ static c_bool do_packet
     {
       hdr->guid_prefix = nn_ntoh_guid_prefix (hdr->guid_prefix);
 
-      TRACE (("HDR(%x:%x:%x vendor %d.%d) len %lu\n",
-        PGUIDPREFIX (hdr->guid_prefix), hdr->vendorid.id[0], hdr->vendorid.id[1], (unsigned long) sz));
+      if (config.enabled_logcats & LC_TRACE)
+      {
+        char addrstr[DDSI_LOCSTRLEN];
+        ddsi_locator_to_string(addrstr, sizeof(addrstr), &srcloc);
+        nn_log (LC_TRACE, "HDR(%x:%x:%x vendor %d.%d) len %lu from %s\n",
+                PGUIDPREFIX (hdr->guid_prefix), hdr->vendorid.id[0], hdr->vendorid.id[1], (unsigned long) sz, addrstr);
+      }
 
       if (config.coexistWithNativeNetworking && is_own_vendor (hdr->vendorid))
       {
@@ -3349,6 +3360,7 @@ static c_bool do_packet
         handle_submsg_sequence
         (
           conn,
+          &srcloc,
           self,
           now (),
           now_et (),
@@ -3524,14 +3536,23 @@ void * recv_thread (struct nn_rbufpool * rbpool)
 
   if (gv.m_factory->m_connless)
   {
-    os_sockWaitsetAdd (gv.waitset, gv.disc_conn_uc);
-    os_sockWaitsetAdd (gv.waitset, gv.data_conn_uc);
-    num_fixed = 2;
-    if (config.allowMulticast)
+    if (config.many_sockets_mode == MSM_NO_UNICAST)
     {
-      os_sockWaitsetAdd (gv.waitset, gv.disc_conn_mc);
-      os_sockWaitsetAdd (gv.waitset, gv.data_conn_mc);
-      num_fixed += 2;
+      /* we only have one - disc, data, uc and mc all alias each other */
+      os_sockWaitsetAdd (gv.waitset, gv.disc_conn_uc);
+      num_fixed = 1;
+    }
+    else
+    {
+      os_sockWaitsetAdd (gv.waitset, gv.disc_conn_uc);
+      os_sockWaitsetAdd (gv.waitset, gv.data_conn_uc);
+      num_fixed = 1 + (gv.disc_conn_uc != gv.data_conn_uc);
+      if (config.allowMulticast)
+      {
+        os_sockWaitsetAdd (gv.waitset, gv.disc_conn_mc);
+        os_sockWaitsetAdd (gv.waitset, gv.data_conn_mc);
+        num_fixed += 2;
+    }
     }
   }
 
@@ -3539,18 +3560,11 @@ void * recv_thread (struct nn_rbufpool * rbpool)
   {
     LOG_THREAD_CPUTIME (next_thread_cputime);
 
-    if (! config.many_sockets_mode)
+    if (pa_ld32 (&gv.participant_set_generation) != lps.gen && config.many_sockets_mode == MSM_MANY_UNICAST)
     {
-      /* no other sockets to check */
-    }
-    else if (pa_ld32 (&gv.participant_set_generation) != lps.gen)
-    {
-      /* rebuild local participant set */
-
+      /* first rebuild local participant set - unless someone's toggling "deafness", this
+         only happens when the participant set has changed, so might as well rebuild it */
       rebuild_local_participant_set (self, &lps);
-
-      /* and rebuild waitset */
-
       os_sockWaitsetPurge (gv.waitset, num_fixed);
       for (i = 0; i < lps.nps; i++)
       {
@@ -3570,7 +3584,7 @@ void * recv_thread (struct nn_rbufpool * rbpool)
       while ((idx = os_sockWaitsetNextEvent (ctx, &conn)) >= 0)
       {
         c_bool ret;
-        if (((unsigned)idx < num_fixed) || ! config.many_sockets_mode)
+        if (((unsigned)idx < num_fixed) || config.many_sockets_mode != MSM_MANY_UNICAST)
         {
           ret = do_packet (self, conn, NULL, rbpool);
         }

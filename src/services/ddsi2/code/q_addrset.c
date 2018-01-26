@@ -53,28 +53,25 @@ static const ut_avlCTreedef_t addrset_treedef =
 
 static int add_addresses_to_addrset_1 (struct addrset *as, const char *ip, int port_mode, const char *msgtag, int req_mc)
 {
-  char buf[INET6_ADDRSTRLEN_EXTENDED];
-  os_sockaddr_storage tmpaddr;
+  char buf[DDSI_LOCSTRLEN];
   nn_locator_t loc;
-  os_int32 kind;
 
-  if (config.useIpv6)
-    kind = config.tcp_enable ? NN_LOCATOR_KIND_TCPv6 : NN_LOCATOR_KIND_UDPv6;
-  else
-    kind = config.tcp_enable ? NN_LOCATOR_KIND_TCPv4 : NN_LOCATOR_KIND_UDPv4;
+  switch (ddsi_locator_from_string(&loc, ip))
+  {
+    case AFSR_OK:
+      break;
+    case AFSR_INVALID:
+      NN_ERROR2 ("%s: %s: not a valid address\n", msgtag, ip);
+      return -1;
+    case AFSR_UNKNOWN:
+      NN_ERROR2 ("%s: %s: unknown address\n", msgtag, ip);
+      return -1;
+    case AFSR_MISMATCH:
+      NN_ERROR2 ("%s: %s: address family mismatch\n", msgtag, ip);
+      return -1;
+  }
 
-  if (!os_sockaddrStringToAddress (ip, (os_sockaddr *) &tmpaddr, !config.useIpv6))
-  {
-    NN_ERROR2 ("%s: %s: not a valid address\n", msgtag, ip);
-    return -1;
-  }
-  if ((config.useIpv6 && tmpaddr.ss_family != AF_INET6) || (!config.useIpv6 && tmpaddr.ss_family != AF_INET))
-  {
-    NN_ERROR3 ("%s: %s: not a valid IPv%d address\n", msgtag, ip, config.useIpv6 ? 6 : 4);
-    return -1;
-  }
-  nn_address_to_loc (&loc, &tmpaddr, kind);
-  if (req_mc && !is_mcaddr (&loc))
+  if (req_mc && !ddsi_is_mcaddr (&loc))
   {
     NN_ERROR2 ("%s: %s: not a multicast address\n", msgtag, ip);
     return -1;
@@ -83,13 +80,13 @@ static int add_addresses_to_addrset_1 (struct addrset *as, const char *ip, int p
   if (port_mode >= 0)
   {
     loc.port = (unsigned) port_mode;
-    nn_log (LC_CONFIG, "%s: add %s", msgtag, locator_to_string_with_port (buf, &loc));
+    nn_log (LC_CONFIG, "%s: add %s", msgtag, ddsi_locator_to_string(buf, sizeof(buf), &loc));
     add_to_addrset (as, &loc);
   }
   else
   {
     nn_log (LC_CONFIG, "%s: add ", msgtag);
-    if (!is_mcaddr (&loc))
+    if (!ddsi_is_mcaddr (&loc))
     {
       int i;
       for (i = 0; i <= config.maxAutoParticipantIndex; i++)
@@ -97,7 +94,7 @@ static int add_addresses_to_addrset_1 (struct addrset *as, const char *ip, int p
         int port = config.port_base + config.port_dg * config.domainId + i * config.port_pg + config.port_d1;
         loc.port = (unsigned) port;
         if (i == 0)
-          nn_log (LC_CONFIG, "%s", locator_to_string_with_port (buf, &loc));
+          nn_log (LC_CONFIG, "%s", ddsi_locator_to_string(buf, sizeof(buf), &loc));
         else
           nn_log (LC_CONFIG, ", :%d", port);
         add_to_addrset (as, &loc);
@@ -109,7 +106,7 @@ static int add_addresses_to_addrset_1 (struct addrset *as, const char *ip, int p
       if (port == -1)
         port = config.port_base + config.port_dg * config.domainId + config.port_d0;
       loc.port = (unsigned) port;
-      nn_log (LC_CONFIG, "%s", locator_to_string_with_port (buf, &loc));
+      nn_log (LC_CONFIG, "%s", ddsi_locator_to_string(buf, sizeof(buf), &loc));
       add_to_addrset (as, &loc);
     }
   }
@@ -131,7 +128,7 @@ int add_addresses_to_addrset (struct addrset *as, const char *addrs, int port_mo
   while ((a = os_strsep (&cursor, ",")) != NULL)
   {
     int port = 0, pos;
-    if (!config.useIpv6)
+    if (config.transport_selector == TRANS_UDP || config.transport_selector == TRANS_TCP)
     {
       if (port_mode == -1 && sscanf (a, "%[^:]:%d%n", ip, &port, &pos) == 2 && a[pos] == 0)
         ; /* XYZ:PORT */
@@ -214,28 +211,6 @@ void unref_addrset (struct addrset *as)
   }
 }
 
-int is_mcaddr (const nn_locator_t *loc)
-{
-  os_sockaddr_storage tmp;
-  nn_loc_to_address (&tmp, loc);
-  switch (loc->kind)
-  {
-    case NN_LOCATOR_KIND_UDPv4: {
-      const os_sockaddr_in *x = (const os_sockaddr_in *) &tmp;
-      return IN_MULTICAST (ntohl (x->sin_addr.s_addr));
-    }
-#if OS_SOCKET_HAS_IPV6
-    case NN_LOCATOR_KIND_UDPv6: {
-      const os_sockaddr_in6 *x = (const os_sockaddr_in6 *) &tmp;
-      return IN6_IS_ADDR_MULTICAST (&x->sin6_addr);
-    }
-#endif
-    default: {
-      return 0;
-    }
-  }
-}
-
 void set_unspec_locator (nn_locator_t *loc)
 {
   loc->kind = NN_LOCATOR_KIND_INVALID;
@@ -266,7 +241,7 @@ void add_to_addrset (struct addrset *as, const nn_locator_t *loc)
   if (!is_unspec_locator (loc))
   {
     ut_avlIPath_t path;
-    ut_avlCTree_t *tree = is_mcaddr (loc) ? &as->mcaddrs : &as->ucaddrs;
+    ut_avlCTree_t *tree = ddsi_is_mcaddr (loc) ? &as->mcaddrs : &as->ucaddrs;
     LOCK (as);
     if (ut_avlCLookupIPath (&addrset_treedef, tree, loc, &path) == NULL)
     {
@@ -281,7 +256,7 @@ void add_to_addrset (struct addrset *as, const nn_locator_t *loc)
 void remove_from_addrset (struct addrset *as, const nn_locator_t *loc)
 {
   ut_avlDPath_t path;
-  ut_avlCTree_t *tree = is_mcaddr (loc) ? &as->mcaddrs : &as->ucaddrs;
+  ut_avlCTree_t *tree = ddsi_is_mcaddr (loc) ? &as->mcaddrs : &as->ucaddrs;
   struct addrset_node *n;
   LOCK (as);
   if ((n = ut_avlCLookupDPath (&addrset_treedef, tree, loc, &path)) != NULL)
@@ -473,9 +448,9 @@ struct log_addrset_helper_arg
 static void log_addrset_helper (const nn_locator_t *n, void *varg)
 {
   const struct log_addrset_helper_arg *arg = varg;
-  char buf[INET6_ADDRSTRLEN_EXTENDED];
+  char buf[DDSI_LOCSTRLEN];
   if (config.enabled_logcats & arg->tf)
-    nn_log (arg->tf, " %s", locator_to_string_with_port (buf, n));
+    nn_log (arg->tf, " %s", ddsi_locator_to_string(buf, sizeof(buf), n));
 }
 
 void nn_log_addrset (logcat_t tf, const char *prefix, const struct addrset *as)

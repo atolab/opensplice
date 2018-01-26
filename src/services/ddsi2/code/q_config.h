@@ -125,6 +125,22 @@ struct prune_deleted_ppant {
 #define AMC_ASM 2u
 #define AMC_TRUE (AMC_SPDP | AMC_ASM)
 
+/* FIXME: this should be fully dynamic ... but this is easier for a quick hack */
+enum transport_selector {
+  TRANS_DEFAULT, /* actually UDP, but this is so we can tell what has been set */
+  TRANS_UDP,
+  TRANS_UDP6,
+  TRANS_TCP,
+  TRANS_TCP6,
+  TRANS_RAWETH
+};
+
+enum many_sockets_mode {
+  MSM_NO_UNICAST,
+  MSM_SINGLE_UNICAST,
+  MSM_MANY_UNICAST
+};
+
 struct config
 {
   int valid;
@@ -142,7 +158,9 @@ struct config
   int tracingRelativeTimestamps;
   int tracingAppendToFile;
   unsigned allowMulticast;
-  int useIpv6;
+  enum transport_selector transport_selector;
+  enum boolean_default compat_use_ipv6;
+  enum boolean_default compat_tcp_enable;
   int dontRoute;
   int enableMulticastLoopback;
   int domainId;
@@ -190,10 +208,9 @@ struct config
   os_uint32 fragment_size;
 
   int publish_uc_locators; /* Publish discovery unicast locators */
+  int enable_uc_locators; /* If false, don't even try to create a unicast socket */
 
   /* TCP transport configuration */
-
-  int tcp_enable;
   int tcp_nodelay;
   int tcp_port;
   os_int64 tcp_read_timeout;
@@ -271,7 +288,7 @@ struct config
   /* compability options */
   enum nn_standards_conformance standards_conformance;
   int explicitly_publish_qos_set_to_default;
-  int many_sockets_mode;
+  enum many_sockets_mode many_sockets_mode;
   int arrival_of_data_asserts_pp_and_ep_liveliness;
   int acknack_numbits_emptyset;
   int respond_to_rti_init_zero_ack_with_invalid_heartbeat;

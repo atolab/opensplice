@@ -34,6 +34,7 @@
 #include "q_ephash.h"
 #include "q_hbcontrol.h"
 #include "q_feature_check.h"
+#include "q_inverse_uint32_set.h"
 
 #include "ddsi_tran.h"
 
@@ -136,6 +137,10 @@ struct entity_common {
   os_mutex lock;
 };
 
+struct avail_entityid_set {
+  struct inverse_uint32_set x;
+};
+
 struct participant
 {
   struct entity_common e;
@@ -148,7 +153,7 @@ struct participant
   struct xevent *pmd_update_xevent;
   nn_locator_t m_locator;
   ddsi_tran_conn_t m_conn;
-  unsigned next_entityid;
+  struct avail_entityid_set avail_entityids;
   os_int32 user_refc;
   os_int32 builtin_refc;
   os_mutex refc_lock;
@@ -340,6 +345,7 @@ int is_writer_entityid (nn_entityid_t id);
 int is_reader_entityid (nn_entityid_t id);
 
 int pp_allocate_entityid (nn_entityid_t *id, unsigned kind, struct participant *pp);
+void pp_release_entityid(struct participant *pp, nn_entityid_t id);
 
 /* Interface for glue code between the OpenSplice kernel and the DDSI
    entities. These all return 0 iff successful. All GIDs supplied

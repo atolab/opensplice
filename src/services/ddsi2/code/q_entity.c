@@ -383,18 +383,30 @@ static void create_a_group (const char *name, const struct sertopic *topic)
 
 /* PARTICIPANT ------------------------------------------------------ */
 
-int pp_allocate_entityid (nn_entityid_t *id, unsigned kind, struct participant *pp)
+int pp_allocate_entityid(nn_entityid_t *id, unsigned kind, struct participant *pp)
+{
+  os_uint32 id1;
+  int ret = 0;
+  os_mutexLock (&pp->e.lock);
+  if (inverse_uint32_set_alloc(&id1, &pp->avail_entityids.x))
+  {
+    *id = to_entityid (id1 * NN_ENTITYID_ALLOCSTEP + kind);
+    ret = 0;
+  }
+  else
+  {
+    NN_ERROR1("pp_allocate_entityid(%x:%x:%x:%x): all ids in use\n", PGUID(pp->e.guid));
+    ret = ERR_OUT_OF_IDS;
+  }
+  os_mutexUnlock (&pp->e.lock);
+  return ret;
+}
+
+void pp_release_entityid(struct participant *pp, nn_entityid_t id)
 {
   os_mutexLock (&pp->e.lock);
-  if (pp->next_entityid + NN_ENTITYID_ALLOCSTEP < pp->next_entityid)
-  {
-    os_mutexUnlock (&pp->e.lock);
-    return ERR_OUT_OF_IDS;
-  }
-  *id = to_entityid (pp->next_entityid | kind);
-  pp->next_entityid += NN_ENTITYID_ALLOCSTEP;
+  inverse_uint32_set_free(&pp->avail_entityids.x, id.u / NN_ENTITYID_ALLOCSTEP);
   os_mutexUnlock (&pp->e.lock);
-  return 0;
 }
 
 int new_participant_guid (const nn_guid_t *ppguid, unsigned flags, const nn_plist_t *plist)
@@ -449,7 +461,7 @@ int new_participant_guid (const nn_guid_t *ppguid, unsigned flags, const nn_plis
   pp->builtins_deleted = 0;
   pp->is_ddsi2_pp = (flags & (RTPS_PF_PRIVILEGED_PP | RTPS_PF_IS_DDSI2_PP)) ? 1 : 0;
   os_mutexInit (&pp->refc_lock, NULL);
-  pp->next_entityid = NN_ENTITYID_ALLOCSTEP;
+  inverse_uint32_set_init(&pp->avail_entityids.x, 1, UINT32_MAX / NN_ENTITYID_ALLOCSTEP);
   pp->lease_duration = config.lease_duration;
   pp->plist = os_malloc (sizeof (*pp->plist));
   nn_plist_copy (pp->plist, plist);
@@ -462,10 +474,14 @@ int new_participant_guid (const nn_guid_t *ppguid, unsigned flags, const nn_plis
     TRACE (("}\n"));
   }
 
-  if (config.many_sockets_mode)
+  if (config.many_sockets_mode == MSM_MANY_UNICAST)
   {
     pp->m_conn = ddsi_factory_create_conn (gv.m_factory, 0, NULL);
     ddsi_conn_locator (pp->m_conn, &pp->m_locator);
+  }
+  else
+  {
+    pp->m_conn = NULL;
   }
 
   /* Before we create endpoints -- and may call unref_participant if
@@ -615,7 +631,7 @@ int new_participant_guid (const nn_guid_t *ppguid, unsigned flags, const nn_plis
      necessary. Must do in this order, or the receive thread won't
      find the new participant */
 
-  if (config.many_sockets_mode)
+  if (config.many_sockets_mode == MSM_MANY_UNICAST)
   {
     pa_fence ();
     pa_inc32 (&gv.participant_set_generation);
@@ -801,7 +817,7 @@ static void unref_participant (struct participant *pp, const struct nn_guid *gui
     if (--gv.nparticipants == 0)
       os_condBroadcast (&gv.participant_set_cond);
     os_mutexUnlock (&gv.participant_set_lock);
-    if (config.many_sockets_mode)
+    if (config.many_sockets_mode == MSM_MANY_UNICAST)
     {
       pa_fence_rel ();
       pa_inc32 (&gv.participant_set_generation);
@@ -817,6 +833,7 @@ static void unref_participant (struct participant *pp, const struct nn_guid *gui
     os_mutexDestroy (&pp->refc_lock);
     entity_common_fini (&pp->e);
     remove_deleted_participant_guid (&pp->e.guid, DPG_LOCAL);
+    inverse_uint32_set_fini(&pp->avail_entityids.x);
     os_free (pp);
   }
   else
@@ -1918,6 +1935,8 @@ static void endpoint_common_init
 
 static void endpoint_common_fini (struct entity_common *e, struct endpoint_common *c)
 {
+  if (!is_builtin_entityid(e->guid.entityid, ownvendorid))
+    pp_release_entityid(c->pp, e->guid.entityid);
   unref_participant (c->pp, &e->guid);
   entity_common_fini (e);
 }

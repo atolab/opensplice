@@ -17,35 +17,24 @@
  *   limitations under the License.
  *
  */
-#ifndef Q_NWIF_H
-#define Q_NWIF_H
+#ifndef NN_INVERSE_UINT32_SET_H
+#define NN_INVERSE_UINT32_SET_H
 
-#include "os_socket.h"
-#include "c_base.h"
-#include "q_protocol.h" /* for nn_locator_t */
+#include "ut_avl.h"
 
-#if defined (__cplusplus)
-extern "C" {
-#endif
-
-#define MAX_INTERFACES 128
-struct nn_interface {
-  nn_locator_t loc;
-  nn_locator_t netmask;
-  os_uint if_index;
-  unsigned mc_capable: 1;
-  unsigned point_to_point: 1;
-  char *name;
+struct inverse_uint32_set_node {
+  ut_avlNode_t avlnode;
+  os_uint32 min, max;
+};
+struct inverse_uint32_set {
+  ut_avlTree_t ids;
+  os_uint32 cursor;
+  os_uint32 min, max;
 };
 
-int make_socket (os_socket *socket, unsigned short port, c_bool stream, c_bool reuse);
-int find_own_ip (const char *requested_address);
+void inverse_uint32_set_init(struct inverse_uint32_set *set, os_uint32 min, os_uint32 max);
+void inverse_uint32_set_fini(struct inverse_uint32_set *set);
+int inverse_uint32_set_alloc(os_uint32 * const id, struct inverse_uint32_set *set);
+void inverse_uint32_set_free(struct inverse_uint32_set *set, os_uint32 id);
 
-#if defined (__cplusplus)
-}
 #endif
-
-
-#endif /* Q_NWIF_H */
-
-/* SHA1 not available (unoffical build.) */

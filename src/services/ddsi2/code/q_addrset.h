@@ -78,7 +78,6 @@ void nn_log_addrset (logcat_t tf, const char *prefix, const struct addrset *as);
    trylock B fails */
 int addrset_eq_onesidederr (const struct addrset *a, const struct addrset *b);
 
-int is_mcaddr (const nn_locator_t *loc);
 int is_unspec_locator (const nn_locator_t *loc);
 void set_unspec_locator (nn_locator_t *loc);
 

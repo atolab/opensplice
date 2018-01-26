@@ -145,7 +145,7 @@ void write_pcap_received
   os_size_t sz
 )
 {
-  if (!config.useIpv6)
+  if (config.transport_selector == TRANS_UDP)
   {
     pcaprec_hdr_t pcap_hdr;
     union {
@@ -185,7 +185,7 @@ void write_pcap_sent
   os_size_t sz
 )
 {
-  if (!config.useIpv6)
+  if (config.transport_selector == TRANS_UDP)
   {
     pcaprec_hdr_t pcap_hdr;
     union {

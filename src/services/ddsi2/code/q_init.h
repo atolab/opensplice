@@ -17,35 +17,10 @@
  *   limitations under the License.
  *
  */
-#ifndef Q_NWIF_H
-#define Q_NWIF_H
+#ifndef Q_INIT_H
+#define Q_INIT_H
 
-#include "os_socket.h"
-#include "c_base.h"
-#include "q_protocol.h" /* for nn_locator_t */
+int create_multicast_sockets(void);
+int joinleave_spdp_defmcip (int dojoin);
 
-#if defined (__cplusplus)
-extern "C" {
 #endif
-
-#define MAX_INTERFACES 128
-struct nn_interface {
-  nn_locator_t loc;
-  nn_locator_t netmask;
-  os_uint if_index;
-  unsigned mc_capable: 1;
-  unsigned point_to_point: 1;
-  char *name;
-};
-
-int make_socket (os_socket *socket, unsigned short port, c_bool stream, c_bool reuse);
-int find_own_ip (const char *requested_address);
-
-#if defined (__cplusplus)
-}
-#endif
-
-
-#endif /* Q_NWIF_H */
-
-/* SHA1 not available (unoffical build.) */

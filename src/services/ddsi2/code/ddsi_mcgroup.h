@@ -17,35 +17,18 @@
  *   limitations under the License.
  *
  */
-#ifndef Q_NWIF_H
-#define Q_NWIF_H
+#ifndef DDSI_MCGROUP_H
+#define DDSI_MCGROUP_H
 
-#include "os_socket.h"
-#include "c_base.h"
-#include "q_protocol.h" /* for nn_locator_t */
+#include "ddsi_tran.h"
 
-#if defined (__cplusplus)
-extern "C" {
+struct nn_group_membership;
+
+struct nn_group_membership *new_group_membership (void);
+void free_group_membership (struct nn_group_membership *mship);
+int ddsi_join_mc (ddsi_tran_conn_t conn, const nn_locator_t *srcip, const nn_locator_t *mcip);
+int ddsi_leave_mc (ddsi_tran_conn_t conn, const nn_locator_t *srcip, const nn_locator_t *mcip);
+void ddsi_transfer_group_membership (ddsi_tran_conn_t conn, ddsi_tran_conn_t newconn);
+int ddsi_rejoin_transferred_mcgroups (ddsi_tran_conn_t conn);
+
 #endif
-
-#define MAX_INTERFACES 128
-struct nn_interface {
-  nn_locator_t loc;
-  nn_locator_t netmask;
-  os_uint if_index;
-  unsigned mc_capable: 1;
-  unsigned point_to_point: 1;
-  char *name;
-};
-
-int make_socket (os_socket *socket, unsigned short port, c_bool stream, c_bool reuse);
-int find_own_ip (const char *requested_address);
-
-#if defined (__cplusplus)
-}
-#endif
-
-
-#endif /* Q_NWIF_H */
-
-/* SHA1 not available (unoffical build.) */
